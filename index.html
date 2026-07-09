@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Meyve Kesme</title>
+<style>
+  :root {
+    --ink: #0b1a2b;
+    --pulp: #f7f3e8;
+    --lime: #b6f36b;
+    --melon: #ff6b6b;
+    --gold: #ffce4a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; background: var(--ink); }
+  body {
+    font-family: 'Trebuchet MS', system-ui, sans-serif;
+    color: var(--pulp);
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none;
+  }
+  #stage {
+    position: relative;
+    width: 100vw; height: 100vh;
+    max-width: 520px;
+    overflow: hidden;
+    background: radial-gradient(120% 80% at 50% 0%, #1b3a5c 0%, #0b1a2b 70%);
+  }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0.35; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  #hud {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 18px 20px; pointer-events: none; z-index: 5;
+  }
+  .stat { line-height: 1.1; }
+  .stat .label { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; opacity: .6; }
+  .stat .val { font-size: 34px; font-weight: bold; }
+  #score .val { color: var(--lime); }
+  #lives { text-align: right; }
+  #lives .val { color: var(--melon); letter-spacing: 2px; }
+
+  .screen {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; padding: 32px; text-align: center;
+    background: rgba(11,26,43,.82); backdrop-filter: blur(6px);
+  }
+  .screen.hidden { display: none; }
+  .title {
+    font-size: 46px; font-weight: 900; line-height: .95;
+    background: linear-gradient(90deg, var(--gold), var(--melon));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .subtitle { font-size: 15px; opacity: .85; max-width: 300px; line-height: 1.5; }
+  .hint { font-size: 13px; opacity: .55; max-width: 280px; line-height: 1.5; }
+  button {
+    font-family: inherit; font-size: 18px; font-weight: bold;
+    color: var(--ink); background: var(--lime);
+    border: none; border-radius: 40px; padding: 15px 40px;
+    cursor: pointer; box-shadow: 0 6px 0 #7fb83e; transition: transform .05s;
+  }
+  button:active { transform: translateY(4px); box-shadow: 0 2px 0 #7fb83e; }
+  #status { font-size: 13px; opacity: .6; min-height: 18px; }
+  .big { font-size: 60px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted></video>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div class="stat" id="score"><div class="label">Skor</div><div class="val">0</div></div>
+    <div class="stat" id="lives"><div class="label">Can</div><div class="val">♥♥♥</div></div>
+  </div>
+
+  <div class="screen" id="start">
+    <div class="title">MEYVE<br>KESME</div>
+    <div class="subtitle">Elini kameraya göster, işaret parmağın bıçak olsun. Havada uçan meyveleri parmağını hızlıca geçirerek kes!</div>
+    <div class="hint">💣 Bombalara dokunma — canını alır.<br>Kaçan meyve de bir can götürür.</div>
+    <button id="startBtn">Başla</button>
+    <div id="status">Kamera izni istenecek…</div>
+  </div>
+
+  <div class="screen hidden" id="over">
+    <div class="big">🍉</div>
+    <div class="title" style="font-size:38px">Oyun Bitti</div>
+    <div class="subtitle">Skorun: <span id="finalScore">0</span></div>
+    <button id="againBtn">Tekrar Oyna</button>
+  </div>
+</div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+
+const video = document.getElementById('cam');
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.querySelector('#score .val');
+const livesEl = document.querySelector('#lives .val');
+const startScreen = document.getElementById('start');
+const overScreen = document.getElementById('over');
+const startBtn = document.getElementById('startBtn');
+const againBtn = document.getElementById('againBtn');
+const statusEl = document.getElementById('status');
+const finalScore = document.getElementById('finalScore');
+
+let W, H, dpr;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = canvas.getBoundingClientRect();
+  W = r.width; H = r.height;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+
+const FRUITS = [
+  { emoji:'🍉', color:'#ff6b6b' }, { emoji:'🍊', color:'#ffa94d' },
+  { emoji:'🍋', color:'#ffe066' }, { emoji:'🍏', color:'#a3e635' },
+  { emoji:'🍓', color:'#ff5c8a' }, { emoji:'🫐', color:'#7c8cff' },
+  { emoji:'🥝', color:'#a3d977' }, { emoji:'🍇', color:'#b18cff' },
+];
+
+let state = 'menu';
+let objects = [], particles = [];
+let score = 0, lives = 3;
+let lastSpawn = 0, spawnGap = 900;
+let bladePts = [];
+let handLandmarker = null;
+let bladePos = null, lastBlade = null;
+
+function spawn() {
+  const isBomb = Math.random() < 0.16;
+  const x = 60 + Math.random() * (W - 120);
+  const vy = -(H * 0.0155 + Math.random() * H * 0.004);
+  const vx = (W/2 - x) * 0.006 + (Math.random()-0.5) * 2.2;
+  const f = FRUITS[Math.floor(Math.random()*FRUITS.length)];
+  objects.push({
+    x, y: H + 40, vx, vy, r: 34,
+    emoji: isBomb ? '💣' : f.emoji,
+    color: isBomb ? '#444' : f.color,
+    bomb: isBomb, rot: Math.random()*6, vrot: (Math.random()-0.5)*0.2,
+    sliced: false
+  });
+}
+
+function burst(x, y, color, count=14) {
+  for (let i=0;i<count;i++){
+    const a = Math.random()*Math.PI*2, s = 2+Math.random()*6;
+    particles.push({ x, y, vx:Math.cos(a)*s, vy:Math.sin(a)*s-2, life:1, color });
+  }
+}
+
+function updateLives() {
+  livesEl.textContent = '♥'.repeat(Math.max(0,lives)) || '—';
+}
+
+function loseLife() {
+  lives--; updateLives();
+  if (lives <= 0) gameOver();
+}
+
+function gameOver() {
+  state = 'over';
+  finalScore.textContent = score;
+  overScreen.classList.remove('hidden');
+}
+
+function reset() {
+  objects = []; particles = []; bladePts = [];
+  score = 0; lives = 3; spawnGap = 900; lastSpawn = 0;
+  scoreEl.textContent = '0'; updateLives();
+}
+
+// meyve-bıçak çarpışması: çizgi segmenti daireye değiyor mu
+function segHit(p1, p2, cx, cy, r) {
+  const dx = p2.x-p1.x, dy = p2.y-p1.y;
+  const len2 = dx*dx+dy*dy || 1;
+  let t = ((cx-p1.x)*dx + (cy-p1.y)*dy)/len2;
+  t = Math.max(0, Math.min(1, t));
+  const px = p1.x+dx*t, py = p1.y+dy*t;
+  return (px-cx)**2 + (py-cy)**2 <= r*r;
+}
+
+function slice(o) {
+  o.sliced = true;
+  if (o.bomb) {
+    burst(o.x, o.y, '#ff3b3b', 26);
+    loseLife(); loseLife(); // bomba 2 can
+  } else {
+    burst(o.x, o.y, o.color, 18);
+    score++; scoreEl.textContent = score;
+    if (score % 10 === 0 && spawnGap > 450) spawnGap -= 60;
+  }
+}
+
+function loop(t) {
+  requestAnimationFrame(loop);
+  ctx.clearRect(0,0,W,H);
+  if (state !== 'play') return;
+
+  if (t - lastSpawn > spawnGap) { spawn(); lastSpawn = t; if(Math.random()<0.25) spawn(); }
+
+  // bıçak izi
+  if (bladePos) {
+    if (lastBlade) bladePts.push({x:bladePos.x, y:bladePos.y, life:1});
+    lastBlade = bladePos;
+  } else lastBlade = null;
+  bladePts = bladePts.filter(p => (p.life -= 0.08) > 0);
+
+  // objeler
+  for (const o of objects) {
+    o.vy += 0.32; o.x += o.vx; o.y += o.vy; o.rot += o.vrot;
+    if (!o.sliced && bladePos && lastBlade) {
+      if (segHit(lastBlade, bladePos, o.x, o.y, o.r)) slice(o);
+    }
+    if (!o.sliced && o.y > H + 60 && o.vy > 0) {
+      o.sliced = true;
+      if (!o.bomb) loseLife();
+    }
+  }
+  objects = objects.filter(o => o.y < H + 80 && !(o.sliced && o.bomb===false && o.y>H) );
+  objects = objects.filter(o => !(o.sliced));  // kesilen anında kaybolur (patlama parçacıkları kalır)
+
+  // parçacıklar
+  for (const p of particles) { p.vy+=0.25; p.x+=p.vx; p.y+=p.vy; p.life-=0.02; }
+  particles = particles.filter(p => p.life>0);
+
+  // çizim
+  for (const o of objects) {
+    ctx.save();
+    ctx.translate(o.x, o.y); ctx.rotate(o.rot);
+    ctx.font = '58px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(o.emoji, 0, 2);
+    ctx.restore();
+  }
+  for (const p of particles) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 5*p.life+1, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // bıçak izi çizimi
+  if (bladePts.length > 1) {
+    for (let i=1;i<bladePts.length;i++){
+      const a = bladePts[i-1], b = bladePts[i];
+      ctx.strokeStyle = `rgba(182,243,107,${b.life})`;
+      ctx.lineWidth = 10*b.life+2; ctx.lineCap='round';
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    }
+  }
+  if (bladePos) {
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    ctx.beginPath(); ctx.arc(bladePos.x, bladePos.y, 8, 0, 7); ctx.fill();
+    ctx.strokeStyle='rgba(182,243,107,.7)'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(bladePos.x, bladePos.y, 15, 0, 7); ctx.stroke();
+  }
+}
+requestAnimationFrame(loop);
+
+// el takibi
+async function initHands() {
+  statusEl.textContent = 'Model yükleniyor…';
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+  handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO", numHands: 1
+  });
+}
+
+async function initCam() {
+  statusEl.textContent = 'Kamera açılıyor…';
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width:{ideal:640}, height:{ideal:480} }, audio:false
+  });
+  video.srcObject = stream;
+  await video.play();
+}
+
+let lastVideoTime = -1;
+function detect() {
+  if (handLandmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const res = handLandmarker.detectForVideo(video, performance.now());
+    if (res.landmarks && res.landmarks.length) {
+      const tip = res.landmarks[0][8]; // işaret parmağı ucu
+      bladePos = { x: (1 - tip.x) * W, y: tip.y * H }; // ayna
+    } else {
+      bladePos = null;
+    }
+  }
+  requestAnimationFrame(detect);
+}
+
+async function begin() {
+  startBtn.disabled = true;
+  try {
+    resize();
+    await initCam();
+    await initHands();
+    detect();
+    reset();
+    state = 'play';
+    startScreen.classList.add('hidden');
+  } catch (e) {
+    statusEl.textContent = 'Hata: ' + (e.message || 'kamera/model açılamadı');
+    startBtn.disabled = false;
+  }
+}
+
+startBtn.addEventListener('click', begin);
+againBtn.addEventListener('click', () => {
+  overScreen.classList.add('hidden');
+  reset();
+  state = 'play';
+});
+resize();
+</script>
+</body>
+</html>
