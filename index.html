@@ -136,7 +136,7 @@ let bladePos = null, lastBlade = null;
 function spawn() {
   const isBomb = Math.random() < 0.16;
   const x = 60 + Math.random() * (W - 120);
-  const vy = -(H * 0.0155 + Math.random() * H * 0.004);
+  const vy = -(H * 0.021 + Math.random() * H * 0.004);
   const vx = (W/2 - x) * 0.006 + (Math.random()-0.5) * 2.2;
   const f = FRUITS[Math.floor(Math.random()*FRUITS.length)];
   objects.push({
@@ -214,7 +214,7 @@ function loop(t) {
 
   // objeler
   for (const o of objects) {
-    o.vy += 0.32; o.x += o.vx; o.y += o.vy; o.rot += o.vrot;
+    o.vy += 0.25; o.x += o.vx; o.y += o.vy; o.rot += o.vrot;
     if (!o.sliced && bladePos && lastBlade) {
       if (segHit(lastBlade, bladePos, o.x, o.y, o.r)) slice(o);
     }
